@@ -188,7 +188,7 @@ def loadDataFromFile(url):
 def loadEntireDataset(folder):
   dataset, labels = [], []
   for url in os.listdir(folder):
-    url2 = '../../%s/%s' % (folder, url)
+    url2 = '%s/%s' % (folder, url)
     mat = loadDataFromFile(url2)
     dataset.append(mat)
     labels.append(url2)
@@ -252,7 +252,8 @@ def train2(model, optim, datasetUrls, batchSize, numBatches, switchDataInterval)
 
   lastDatasetLoaded = ''
   for batchNum in range(numBatches):
-    if cv.waitKey(10) == 's':
+    
+    if cv.waitKey(10) & 0xFF == ord('s'):
       print('saving...')
       torch.save(model.state_dict(), 'quicksave.model')
       print('saved')
@@ -271,7 +272,7 @@ def train2(model, optim, datasetUrls, batchSize, numBatches, switchDataInterval)
       
     
     if batchNum + 100 >= numBatches or (batchNum+1) % 100 == 0:
-      toLoad = 'datasetBig/L10'
+      toLoad = '../../datasetBig/L10'
       if lastDatasetLoaded != toLoad:
         dataset, labels = loadEntireDataset(toLoad)
         lastDatasetLoaded = toLoad
@@ -311,16 +312,22 @@ model = EEG_Model_2().to(device)
 optim = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 datasetUrls = [
-  'datasetBig/L01',
-  'datasetBig/L02',
-  'datasetBig/L03',
-  'datasetBig/L04',
-  'datasetBig/L05',
-  'datasetBig/L06',
-  'datasetBig/L07',
-  'datasetBig/L08',
-  'datasetBig/L09',
+  '../../datasetBig/L01',
+  '../../datasetBig/L02',
+  '../../datasetBig/L03',
+  '../../datasetBig/L04',
+  '../../datasetBig/L05',
+  '../../datasetBig/L06',
+  '../../datasetBig/L07',
+  '../../datasetBig/L08',
+  '../../datasetBig/L09',
 ]
+
+# open a cv2 window so that you can
+# - focus on the window
+# - save the model with 's'
+blankImg = numpy.zeros((320,240,3), dtype=numpy.uint8)
+cv.imshow('saving window', blankImg)
 
 # initial, just to see if it works
 
@@ -334,5 +341,6 @@ train2(
 )
 
 # final
-torch.save(model.state_dict(), 'EEG_model_2.mAAAEEEHHH')
+torch.save(model.state_dict(), '../../EEG_model_2.model')
+cv.destroyAllWindows()
 
