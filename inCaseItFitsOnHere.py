@@ -52,6 +52,20 @@ class LinearLayer(nn.Module):
     x = o.activ(x)
     return x
 
+class Conv1dLayer(nn.Module):
+  def __init__(o, inChs, outChs, width, activ, useBatchNorm=True):
+    super(Conv1dLayer, o).__init__()
+    o.conv = nn.Conv1d(inChs, outChs, width, 1, (width//2))
+    o.norm = nn.BatchNorm1d(outChs)
+    o.activ = activ
+    o.useBatchNorm = useBatchNorm
+
+  def forward(o, x):
+    x = o.conv(x)
+    if o.useBatchNorm:
+      x = o.norm(x)
+    x = o.activ(x)
+    return x
 
 class EEG_Model_2(nn.Module):
   # Ch -> number of inputs
@@ -78,6 +92,7 @@ class EEG_Model_2(nn.Module):
     o.gru = nn.GRU(o.flatSize, gruSize)
     
     o.decide = nn.Linear(gruSize, outSize)
+    o.optimizers = None # removing this line may fix an issue
 
   def forward(o, x, h=None):
     
@@ -95,8 +110,78 @@ class EEG_Model_2(nn.Module):
     x = o.fcChannels4(x)
     
     x = x.unsqueeze(0)
-    #print(x.shape)
     x = x.view(firstDim, secondDim, o.comprFftChannels, o.comprInputs)
+    x = x.permute(1,0,3,2)
+    # ffts[timeChunk][N][C][time]
+
+    # put it through a GRU
+    x = x.reshape(-1, x.shape[1], o.flatSize)
+    #print(x.shape)
+    if h is None:
+      x, h_new = o.gru(x)
+    else:
+      x, h_new = o.gru(x, h)
+
+    #print(x.shape)
+    x = o.decide(x).permute(0,2,1)
+    #print(x.shape)
+
+    return x, h_new
+
+class EEG_Model_3(nn.Module):
+  # Ch -> number of inputs
+  def __init__(o, inputs=128, fftChannels=64, comprInputs=64, comprFftChannels=32, gruSize=256, outSize=9, useOwnOptimizers=False):
+    super(EEG_Model_3, o).__init__()
+
+    o.act = nn.LeakyReLU(0.2)
+    
+    # permute(0,2,1)
+    o.fcChannels1 = Conv1dLayer(fftChannels, fftChannels, 3, o.act)
+    o.fcChannels2 = Conv1dLayer(fftChannels, comprFftChannels, 3, o.act)
+    #o.fcChannels3 = Conv1dLayer(fftChannels, comprFftChannels, 3, o.act)
+    
+    #o.fcChannels3 = LinearLayer(inputs, inputs, comprFftChannels, o.act)
+    o.fcChannels4 = LinearLayer(inputs, comprInputs, comprFftChannels, o.act)
+    # permute(0,2,1)
+    
+    o.fftChannels = fftChannels
+    o.comprInputs = comprInputs
+    o.comprFftChannels = comprFftChannels
+    o.flatSize = comprInputs * comprFftChannels
+
+    o.gru = nn.GRU(o.flatSize, gruSize)
+    o.decide = nn.Linear(gruSize, outSize)
+
+    if useOwnOptimizers:
+      o.optimizers = [
+        torch.optim.Adam(o.fcChannels1.parameters()),
+        torch.optim.Adam(o.fcChannels2.parameters()),
+        torch.optim.Adam(o.fcChannels4.parameters()),
+        torch.optim.Adam(o.gru.parameters()),
+        torch.optim.Adam(o.decide.parameters())
+      ]
+    else:
+      o.optimizers = []
+
+  def forward(o, x, h=None):
+    
+
+    firstDim, secondDim = x.shape[0], x.shape[1]
+    #print(firstDim, secondDim)
+    x = x.reshape(-1, x.shape[2], x.shape[3])
+    
+    x   =   x.permute(0,2,1)
+    x = o.fcChannels1(x)
+    x = o.fcChannels2(x)
+    #x = o.fcChannels3(x)
+    x = o.fcChannels4(x)
+    x   =   x.permute(0,2,1)
+    
+    x = x.unsqueeze(0)
+    #print(x.shape)
+    #print(x.shape)
+    #print(firstDim, secondDim, o.comprFftChannels, o.comprInputs)
+    x = x.view(firstDim, secondDim, o.comprInputs, o.comprFftChannels)
     #print(x.shape)
     x = x.permute(1,0,3,2)
     # ffts[timeChunk][N][C][time]
@@ -212,7 +297,12 @@ def oneTrain(model, optim, dataset, labels, batchSize, batchNum, train=True):
   y = model.convertY(labels)
   # x[N][timeChunk][C][time]
   y_pred = model(x)[0]
-  optim.zero_grad()
+
+  if model.optimizers is None:
+    optim.zero_grad()
+  else:
+    for opt in model.optimizers:
+      opt.zero_grad()
 
   if train:
     # print(y_pred.shape, y.shape)
@@ -222,8 +312,12 @@ def oneTrain(model, optim, dataset, labels, batchSize, batchNum, train=True):
     #predictions = torch.argmax(y_pred, 2)
     #print(batchNum, '#######', predictions)
     modelLoss.backward()
-    
-    optim.step()
+
+    if model.optimizers is None:
+      optim.step()
+    else:
+      for opt in model.optimizers:
+        opt.step()
   else:
     predictions = torch.argmax(y_pred, 1)
     print(batchNum, '#######', predictions)
@@ -308,8 +402,10 @@ def test(model, datasetUrls):
 
 
 
-model = EEG_Model_2().to(device)
-optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+model = EEG_Model_3().to(device)
+optim = torch.optim.Adam(model.parameters(), lr=3e-4)
+
+model.optimizers.append(optim)
 
 datasetUrls = [
   '../../datasetBig/L01',
@@ -322,6 +418,8 @@ datasetUrls = [
   '../../datasetBig/L08',
   '../../datasetBig/L09',
 ]
+
+#datasetUrls = ['../../datasetBig/L10']
 
 # open a cv2 window so that you can
 # - focus on the window
